@@ -103,11 +103,16 @@ class LeantimeClient:
         return await self.call("leantime.rpc.Projects.getAll")
     
     async def create_project(self, name: str, details: Optional[str] = None, **kwargs) -> dict:
-        """Create a new project."""
-        params = {"name": name, **kwargs}
+        """Create a new project.
+
+        Note: Leantime's Projects.addProject RPC expects the project fields
+        wrapped in a single 'values' object (same shape as addTicket/updateTicket).
+        Passing them flat returns JSON-RPC error -32602 (Invalid params).
+        """
+        values = {"name": name, **kwargs}
         if details:
-            params["details"] = details
-        return await self.call("leantime.rpc.Projects.addProject", params)
+            values["details"] = details
+        return await self.call("leantime.rpc.Projects.addProject", {"values": values})
     
     async def get_ticket(self, ticket_id: int) -> dict:
         """Get ticket details by ID."""

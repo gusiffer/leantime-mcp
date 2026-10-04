@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import logging
+import uvicorn
 from typing import Any
 from dotenv import load_dotenv
 
@@ -83,10 +84,15 @@ async def list_projects() -> str:
 
 
 @app.tool()
-async def create_project(name: str, details: str = None, clientId: int = None) -> str:
-    """Create a new project."""
+async def create_project(name: str, details: str = None, clientId: int = None, owner: int = None) -> str:
+    """Create a new project.
+
+    owner: Leantime user id of the project owner (e.g. the owning agent's
+    Leantime account id). Optional; Leantime defaults it to the API user.
+    """
     client = get_client()
-    result = await client.create_project(name=name, details=details, clientId=clientId)
+    kwargs = {"owner": owner} if owner is not None else {}
+    result = await client.create_project(name=name, details=details, clientId=clientId, **kwargs)
     return json.dumps(result, indent=2)
 
 
@@ -223,8 +229,100 @@ async def upsert_subtask(parent_ticket: int, headline: str,
 
 
 def main():
-    """Main entry point for the MCP server."""
-    app.run()
+    """Main entry point for the MCP server.
+
+    Transport selection via LEANTIME_MCP_TRANSPORT (default: stdio):
+      stdio            — for process-spawning clients (VS Code, Claude Desktop)
+      streamable-http  — Streamable HTTP on LEANTIME_MCP_HOST/LEANTIME_MCP_PORT
+    """
+    transport = os.getenv("LEANTIME_MCP_TRANSPORT", "stdio").lower()
+    logger.info("Starting Leantime MCP server with transport %s", transport)
+
+    if transport == "streamable-http":
+        _run_streamable_http()
+    else:
+        app.run(transport="stdio")
+
+
+def _run_streamable_http():
+    """Run the server over Streamable HTTP with DNS-rebinding protection.
+
+    FastMCP 2.12.4 does not forward TransportSecuritySettings into the
+    StreamableHTTP session manager, so the /mcp Route endpoint is wrapped
+    with the MCP SDK's TransportSecurityMiddleware here.
+    """
+    import starlette.routing
+    from starlette.requests import Request
+    from mcp.server.transport_security import (
+        TransportSecurityMiddleware,
+        TransportSecuritySettings,
+    )
+
+    host = os.getenv("LEANTIME_MCP_HOST", "127.0.0.1")
+    port = int(os.getenv("LEANTIME_MCP_PORT", "8000"))
+    path = os.getenv("LEANTIME_MCP_PATH", "/mcp")
+    allowed_hosts = [
+        h for h in os.getenv("LEANTIME_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()
+    ]
+    # Default allow-list covers the bind address itself; anything else is refused.
+    if not allowed_hosts:
+        allowed_hosts = [f"{host}:{port}", f"localhost:{port}"]
+
+    settings = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        # Origins carry a scheme; allow both raw host:port and http(s) scheme forms.
+        allowed_origins=list(
+            {h for h in allowed_hosts} | {f"http://{h}" for h in allowed_hosts}
+        ),
+    )
+    middleware = TransportSecurityMiddleware(settings)
+
+    asgi_app = app.http_app(path=path)
+    wrapped_route_index = next(
+        (i for i, r in enumerate(asgi_app.router.routes)
+         if isinstance(r, starlette.routing.Route) and r.path == path),
+        None,
+    )
+    if wrapped_route_index is not None:
+        inner = asgi_app.router.routes[wrapped_route_index].app
+
+        class _SecurityGuard:
+            """Pure-ASGI guard so Starlette keeps the route method-agnostic."""
+
+            def __init__(self, app):
+                self.app = app
+
+            async def __call__(self, scope, receive, send):
+                request = Request(scope, receive=receive)
+                error_response = await middleware.validate_request(
+                    request, is_post=(scope["method"] == "POST")
+                )
+                if error_response is not None:
+                    await error_response(scope, receive, send)
+                    return
+                await self.app(scope, receive, send)
+
+        asgi_app.router.routes[wrapped_route_index] = starlette.routing.Route(
+            path, endpoint=_SecurityGuard(inner), name="mcp"
+        )
+    else:
+        logger.warning(
+            "Could not locate %s route; running without DNS-rebinding protection", path
+        )
+
+    logging.getLogger("uvicorn.error").info(
+        "Leantime MCP Streamable HTTP on http://%s:%s%s (allowed hosts: %s)",
+        host, port, path, ", ".join(allowed_hosts),
+    )
+
+    uvicorn.run(
+        asgi_app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=0,
+    )
 
 
 if __name__ == "__main__":
