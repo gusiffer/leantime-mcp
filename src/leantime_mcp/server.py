@@ -33,34 +33,53 @@ leantime_client: LeantimeClient = None
 def get_client() -> LeantimeClient:
     """Get or create the Leantime client instance."""
     global leantime_client
-    
+
     if leantime_client is None:
+        # Profile support: when LEANTIME_PROFILE is set (e.g. "ALICE"), read the
+        # prefixed keys LEANTIME_ALICE_URL / _API_KEY / _USER_EMAIL instead of the
+        # plain names. Unset LEANTIME_PROFILE keeps the original behavior.
+        profile = (os.getenv("LEANTIME_PROFILE") or "").strip().upper()
+
+        if profile:
+            key_url = f"LEANTIME_{profile}_URL"
+            key_api = f"LEANTIME_{profile}_API_KEY"
+            key_email = f"LEANTIME_{profile}_USER_EMAIL"
+        else:
+            key_url = "LEANTIME_URL"
+            key_api = "LEANTIME_API_KEY"
+            key_email = "LEANTIME_USER_EMAIL"
+
         # Get configuration from environment
-        leantime_url = os.getenv("LEANTIME_URL")
-        leantime_api_key = os.getenv("LEANTIME_API_KEY")
-        leantime_user_email = os.getenv("LEANTIME_USER_EMAIL")
-        
+        leantime_url = os.getenv(key_url)
+        leantime_api_key = os.getenv(key_api)
+        leantime_user_email = os.getenv(key_email)
+
         if not leantime_url:
             raise ValueError(
-                "LEANTIME_URL environment variable is required. "
+                f"{key_url} environment variable is required. "
                 "Please set it in your .env file or environment."
             )
-        
+
         if not leantime_api_key:
             raise ValueError(
-                "LEANTIME_API_KEY environment variable is required. "
+                f"{key_api} environment variable is required. "
                 "Please set it in your .env file or environment."
             )
-        
+
         if not leantime_user_email:
             raise ValueError(
-                "LEANTIME_USER_EMAIL environment variable is required. "
+                f"{key_email} environment variable is required. "
                 "Please set it in your .env file or environment."
             )
-        
+
         leantime_client = LeantimeClient(leantime_url, leantime_api_key)
-        logger.info(f"Initialized Leantime client for {leantime_url}")
-    
+        if profile:
+            logger.info(
+                "Initialized Leantime client for %s using profile %s", leantime_url, profile
+            )
+        else:
+            logger.info(f"Initialized Leantime client for {leantime_url}")
+
     return leantime_client
 
 
@@ -200,7 +219,12 @@ async def add_timesheet(user_id: int, ticket_id: int, hours: float, date: str, d
 
 @app.tool()
 async def get_timesheets(project_id: int = None, user_id: int = None) -> str:
-    """Get timesheets, optionally filtered by project or user."""
+    """Get timesheets, optionally filtered by project or user.
+
+    Uses RPC Timesheets.pollForNewTimesheets — Leantime has no Timesheets
+    getTimesheets method (API: -32601 Method not found); user filtering is
+    applied client-side over the returned rows.
+    """
     client = get_client()
     result = await client.get_timesheets(project_id=project_id, user_id=user_id)
     return json.dumps(result, indent=2)

@@ -266,7 +266,7 @@ TOOLS = [
     ),
     Tool(
         name="get_timesheets",
-        description="Get timesheet entries, optionally filtered by project or user",
+        description="Get timesheet entries, optionally filtered by project or user (RPC Timesheets.pollForNewTimesheets)",
         inputSchema={
             "type": "object",
             "properties": {

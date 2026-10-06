@@ -220,13 +220,21 @@ class LeantimeClient:
         return await self.call("leantime.rpc.Timesheets.addTime", params)
     
     async def get_timesheets(self, project_id: Optional[int] = None, user_id: Optional[int] = None) -> list:
-        """Get timesheet entries."""
+        """Get timesheet entries.
+
+        Backed by ``leantime.rpc.Timesheets.pollForNewTimesheets`` — Leantime
+        has no ``Timesheets.getTimesheets`` RPC method (its API answers
+        -32601 "Method doesn't exist: getTimesheets"; verified 2026-10-05).
+        pollForNewTimesheets takes an optional projectId and has no server-side
+        user filter, so a user_id filter is applied client-side on the rows.
+        """
         params = {}
         if project_id:
             params["projectId"] = project_id
+        entries = await self.call("leantime.rpc.Timesheets.pollForNewTimesheets", params) or []
         if user_id:
-            params["userId"] = user_id
-        return await self.call("leantime.rpc.Timesheets.getTimesheets", params)
+            entries = [row for row in entries if str(row.get("userId", "")) == str(user_id)]
+        return entries
     
     async def get_all_subtasks(self, ticket_id: int) -> list:
         """Get all subtasks for a ticket.

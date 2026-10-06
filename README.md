@@ -43,6 +43,37 @@ For local MCP clients like Claude Desktop that communicate via standard input/ou
 }
 ```
 
+### Multiple User Profiles
+
+Set `LEANTIME_PROFILE` (e.g. `ALICE`) to read the prefixed keys
+`LEANTIME_ALICE_URL`, `LEANTIME_ALICE_API_KEY`, and `LEANTIME_ALICE_USER_EMAIL`
+instead of the plain names. This lets one `.env` file hold several users'
+credentials, with each server instance selecting its block:
+
+```json
+{
+  "mcpServers": {
+    "leantime-alice": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/daniel-eder/leantime-mcp.git",
+        "leantime-mcp"
+      ],
+      "env": {
+        "LEANTIME_PROFILE": "ALICE"
+      },
+      "envFile": "${workspaceFolder}/.env"
+    }
+  }
+}
+```
+
+When `LEANTIME_PROFILE` is unset the server reads `LEANTIME_URL`,
+`LEANTIME_API_KEY`, and `LEANTIME_USER_EMAIL` as before.
+
+```
+
 ### HTTP Transport
 
 For remote HTTP connections, first start the server with HTTP transport (see [Running the Server](#running-the-server)), then configure your MCP client to connect to the HTTP endpoint:
