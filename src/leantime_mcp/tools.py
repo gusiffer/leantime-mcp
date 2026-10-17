@@ -337,6 +337,75 @@ TOOLS = [
             "required": ["parent_ticket", "headline"]
         }
     ),
+    Tool(
+        name="ideas_list_boards",
+        description="List the Ideas boards of a project (Ideas.getAllBoards; projectId required). Read-only; read/create pass only - no delete/patch Ideas methods exist in this toolset.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "integer",
+                    "description": "Project ID whose Ideas boards to list"
+                }
+            },
+            "required": ["project_id"]
+        }
+    ),
+    Tool(
+        name="ideas_list",
+        description="List ideas, optionally filtered by project and/or board (Ideas.pollForNewIdeas). Read-only; read/create pass only - no delete/patch Ideas methods exist in this toolset.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "integer",
+                    "description": "Optional project ID to filter ideas"
+                },
+                "board": {
+                    "type": "integer",
+                    "description": "Optional board (canvas) ID to filter ideas"
+                }
+            }
+        }
+    ),
+    Tool(
+        name="ideas_create",
+        description="Create a new idea on an Ideas board (Ideas.createIdeaItem), returning the new idea id. READ/CREATE ONLY - no delete/patch Ideas methods exist in this toolset; native deletions stay founder-UI-side this pass (ticket #333 scope-out).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Idea text/description"
+                },
+                "board_canvas_id": {
+                    "type": "integer",
+                    "description": "Board (canvas) ID to place the idea on, from ideas_list_boards"
+                },
+                "project_id": {
+                    "type": "integer",
+                    "description": "Project ID owning the board"
+                },
+                "author_id": {
+                    "type": "integer",
+                    "description": "Leantime user id authoring the idea (the calling mount's account id)"
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Idea status key (default 'idea'; labels: idea/research/prototype/validation/implemented/deferred)"
+                },
+                "data": {
+                    "type": "string",
+                    "description": "Details/data for the idea (optional)"
+                },
+                "box": {
+                    "type": "string",
+                    "description": "Canvas box type (default 'idea')"
+                }
+            },
+            "required": ["description", "board_canvas_id", "project_id", "author_id"]
+        }
+    ),
 ]
 
 

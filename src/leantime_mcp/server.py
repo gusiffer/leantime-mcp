@@ -252,6 +252,70 @@ async def upsert_subtask(parent_ticket: int, headline: str,
     return json.dumps(result, indent=2)
 
 
+@app.tool()
+async def update_project(project_id: int, name: str = None, details: str = None,
+                         clientId: int = None, hourBudget: int = None, dollarBudget: int = None,
+                         start: str = None, end: str = None, menuType: str = None,
+                         state: int = None, parent: int = None) -> str:
+    """Update (PARTIAL patch) a project - only the fields provided are written.
+
+    Backed by leantime.rpc.Projects.patchProject (Projects.patch), which preserves
+    all fields not passed (including 'type'); requires manager+ on the project.
+    Closes the #80 quirk-2 gap: the toolset previously had create_project only,
+    so project-details corrections needed manual UI edits or direct DB writes.
+    Verify with a get_project read-back after use. state=-1 archives (fires
+    ProjectArchived); parent only accepts program/strategy containers.
+    """
+    client = get_client()
+    fields = {}
+    for key, value in (("name", name), ("details", details), ("clientId", clientId),
+                       ("hourBudget", hourBudget), ("dollarBudget", dollarBudget),
+                       ("start", start), ("end", end), ("menuType", menuType),
+                       ("state", state), ("parent", parent)):
+        if value is not None:
+            fields[key] = value
+    if not fields:
+        raise ValueError("Provide at least one project field to update")
+    result = await client.update_project(project_id=project_id, **fields)
+    return json.dumps({
+        "success": bool(result) if result is not None else result,
+        "patchedFields": sorted(fields.keys()),
+        "projectId": project_id,
+    }, indent=2)
+
+
+@app.tool()
+async def get_timesheet(entry_id: int) -> str:
+    """Read ONE timesheet entry by id (Timesheets.getTimesheet).
+
+    Soft-denies to false for entries the seat may not view (other users' entries
+    need manager+). Added 2026-10-09 for #80: the plural getTimesheets method
+    does not exist upstream (-32601).
+    """
+    client = get_client()
+    result = await client.get_timesheet(entry_id)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def get_timesheets_range(date_from: str, date_to: str, project_id: int = None,
+                               user_id: int = None, kind: str = "all") -> str:
+    """Timesheets in a date bracket with SERVER-SIDE filters (Timesheets.getAll).
+
+    date_from / date_to: 'YYYY-MM-DD' (the RPC layer casts the strings into date
+    objects - probe-verified 2026-10-09). project_id and user_id are filtered
+    server-side. user_id omitted = all users and requires manager+; your own
+    user_id needs editor+ only. Replaces the client-side string filtering dance
+    of get_timesheets when a date window is known.
+    """
+    client = get_client()
+    result = await client.get_timesheets_range(
+        date_from=date_from, date_to=date_to, project_id=project_id,
+        user_id=user_id, kind=kind,
+    )
+    return json.dumps(result, indent=2)
+
+
 def main():
     """Main entry point for the MCP server.
 
@@ -347,6 +411,50 @@ def _run_streamable_http():
         log_level="info",
         timeout_graceful_shutdown=0,
     )
+
+
+@app.tool()
+async def ideas_list_boards(project_id: int) -> str:
+    """List the Ideas boards of a project (Ideas.getAllBoards; projectId required).
+
+    Read-only. Returns board rows {id, title, projectId, ...} - the Ideas
+    module auto-bootstraps a default "Board" per project. Read/create pass
+    only: no delete/patch Ideas methods exist in this toolset (ticket #333
+    scope-out).
+    """
+    client = get_client()
+    result = await client.ideas_list_boards(project_id)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def ideas_list(project_id: int = None, board: int = None) -> str:
+    """List ideas, optionally filtered by project and/or board (Ideas.pollForNewIdeas).
+
+    Read-only. Rows carry description/data/status/box, projectId + canvasId
+    and ISO8601 created/modified. Read/create pass only: no delete/patch
+    Ideas methods exist in this toolset (ticket #333 scope-out).
+    """
+    client = get_client()
+    result = await client.ideas_list(project_id, board)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def ideas_create(description: str, board_canvas_id: int, project_id: int, author_id: int, status: str = "idea", data: str = "", box: str = "idea") -> str:
+    """Create a new idea on an Ideas board (Ideas.createIdeaItem) -> new idea id.
+
+    READ/CREATE ONLY - no delete/patch Ideas methods exist in this toolset;
+    native deletions stay founder-UI-side this pass (ticket #333 scope-out).
+    description is the idea text; board_canvas_id is the board (canvas) id
+    from ideas_list_boards; project_id is the owning project; author_id is
+    the writing Leantime user id; status defaults to 'idea' (labels:
+    idea/research/prototype/validation/implemented/deferred). Returns the
+    new idea id.
+    """
+    client = get_client()
+    result = await client.ideas_create(description, board_canvas_id, project_id, author_id, status=status, data=data, box=box)
+    return json.dumps({"id": result}, indent=2)
 
 
 if __name__ == "__main__":

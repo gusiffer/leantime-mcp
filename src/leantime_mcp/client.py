@@ -155,19 +155,29 @@ class LeantimeClient:
         # Add tags if provided
         if tags is not None:
             values["tags"] = tags
-        
+
+        # Assignee normalization (#80 quirk +3, fix 2026-10-09): Leantime's ticket
+        # assignee column is 'editorId'; 'assignedTo' is silently ignored by
+        # addTicket (verified live on #88).
+        self._normalize_assignee(values)
+
         params = {"values": values}
         return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
-    
+
     async def update_ticket(self, ticket_id: int, project_id: int, **kwargs) -> dict:
         """Update an existing ticket.
-        
+
         Args:
             ticket_id: The ID of the ticket to update
             project_id: The project ID where the ticket belongs
             **kwargs: Additional parameters to update
         """
         values = {"id": ticket_id, "projectId": project_id, **kwargs}
+        # Assignee normalization (#80 quirk +3, fix 2026-10-09): Leantime ignores
+        # 'assignedTo' on updateTicket (string AND int probes left editorId ''
+        # on #88); the real column is 'editorId' (verified live: editorId: 13
+        # landed and rendered as the assignee).
+        self._normalize_assignee(values)
         params = {"values": values}
         return await self.call("leantime.rpc.Tickets.Tickets.updateTicket", params)
     
@@ -191,20 +201,39 @@ class LeantimeClient:
         """Get user details by email address."""
         return await self.call("leantime.rpc.Users.Users.getUserByEmail", {"email": email})
     
-    async def add_comment(self, module: str, module_id: int, comment: str) -> dict:
-        """Add a comment to a module (e.g., ticket, project)."""
+    async def add_comment(self, module: str, module_id: int, comment: str) -> bool:
+        """Add a comment to a module (e.g., ticket, project).
+
+        Leantime's Comments.addComment RPC signature is
+        addComment($values, $module, $entityId, $entity = null): the text must
+        ride in a 'values' object under 'text' ('father'/'parentId' selects the
+        parent comment), and the entity id must be named 'entityId'. The old
+        flat {module, moduleId, comment} shape is the ROOT CAUSE of ticket #71:
+        the JSON-RPC layer answers -32602 Invalid params because required
+        params 'values' and 'entityId' are missing. Verified against the live
+        instance 2026-10-09: flat shape -> -32602; corrected shape -> result
+        true + read-back via corrected getComments. Aliases ('tickets', 'task',
+        'tasks') are normalized server-side; unknown modules raise -32602.
+        """
         params = {
+            "values": {"text": comment, "father": 0},
             "module": module,
-            "moduleId": module_id,
-            "comment": comment
+            "entityId": module_id,
         }
         return await self.call("leantime.rpc.Comments.addComment", params)
-    
+
     async def get_comments(self, module: str, module_id: int) -> list:
-        """Get comments for a module."""
+        """Get comments for a module.
+
+        Leantime's Comments.getComments RPC signature is
+        getComments($module, $entityId, $commentOrder = 0, $parent = 0,
+        $strict = false): the entity id must be named 'entityId' - the old
+        {module, moduleId} shape returns -32602 Invalid params (ticket #71).
+        Verified live 2026-10-09: corrected shape returns the comment array.
+        """
         params = {
             "module": module,
-            "moduleId": module_id
+            "entityId": module_id,
         }
         return await self.call("leantime.rpc.Comments.getComments", params)
     
@@ -227,6 +256,12 @@ class LeantimeClient:
         -32601 "Method doesn't exist: getTimesheets"; verified 2026-10-05).
         pollForNewTimesheets takes an optional projectId and has no server-side
         user filter, so a user_id filter is applied client-side on the rows.
+        Re-verified live 2026-10-09 (#80): getTimesheets still answers -32601
+        ("Method doesn't exist: getTimesheets") - the gap is upstream truth, not
+        a wrapper bug. For server-side filters prefer get_timesheets_range()
+        below (Timesheets.getAll; accepts plain date strings, probe-verified
+        same day), or get_timesheet() for a single entry (Timesheets.getTimesheet,
+        also probe-verified 2026-10-09).
         """
         params = {}
         if project_id:
@@ -301,6 +336,8 @@ class LeantimeClient:
         if tags is not None:
             values["tags"] = tags
         
+        self._normalize_assignee(values)  # assignee fix: assignedTo -> editorId (#80 quirk +3)
+
         # Use addTicket to create the subtask
         params = {"values": values}
         
@@ -308,3 +345,152 @@ class LeantimeClient:
         logger.info(f"Creating subtask via addTicket: type=subtask, dependingTicketId={parent_ticket_id}, milestoneid={milestone_id}")
         
         return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
+
+    # ------------------------------------------------------------------
+    # Helpers + methods added 2026-10-09 for the #80 quirk family
+    # (ride the #71 redeploy window; fixes verified by live RPC probes)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_assignee(values: dict) -> None:
+        """Translate an 'assignedTo' value into Leantime's real assignee column.
+
+        Leantime stores the ticket assignee in 'editorId' ("assigned to"); there
+        is NO 'assignedTo' RPC key - addTicket/updateTicket silently ignore it
+        (#80 quirk +3, verified live 2026-10-09 on #88: string '13' and int 13
+        both left editorId '', while values {'editorId': 13} landed and rendered
+        as assignee "Pike Agent"). Casts numeric values to int; junk values are
+        dropped with a warning instead of being shipped to Leantime.
+        """
+        raw = values.pop("assignedTo", None)
+        if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+            return
+        try:
+            values["editorId"] = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("Dropping non-numeric assignedTo value: %r", raw)
+
+    async def update_project(self, project_id: int, **fields) -> bool:
+        """Patch a project with PARTIAL updates (only the fields passed change).
+
+        RPC: leantime.rpc.Projects.patchProject($id, $values) - the @api JSON-RPC
+        entry point that delegates to Projects::patch(); unlike editProject
+        (full replace) it preserves every field not passed, including 'type', and
+        explicitly strips control fields. Requires manager+ on the target project
+        (projects.edit); verified live 2026-10-09 with an idempotent patch on
+        project 21 (result true). Closes #80 quirk 2: the toolset had
+        create_project but no project-update path, so details corrections needed
+        manual UI edits or direct DB writes.
+
+        Common fields: name, details, clientId, hourBudget, dollarBudget,
+        start, end, menuType, state (-1 archives, fires ProjectArchived),
+        parent (container nesting; cyclic parents rejected server-side).
+        """
+        params = {"id": project_id, "values": fields}
+        return await self.call("leantime.rpc.Projects.patchProject", params)
+
+    async def get_timesheet(self, entry_id: int) -> dict:
+        """Read ONE timesheet entry by id.
+
+        RPC: leantime.rpc.Timesheets.getTimesheet(int $id) - exists on the live
+        instance (probe 2026-10-09: id 1 returned the row). Soft-denies to false
+        for entries the seat may not view (other users' entries need manager+).
+        """
+        return await self.call("leantime.rpc.Timesheets.getTimesheet", {"id": entry_id})
+
+    async def get_timesheets_range(self, date_from: str, date_to: str, project_id: Optional[int] = None, user_id: Optional[int] = None, kind: str = "all") -> list:
+        """Read timesheets in a date bracket with SERVER-SIDE filters.
+
+        RPC: leantime.rpc.Timesheets.getAll($dateFrom, $dateTo, $projectId = -1,
+        $kind = 'all', $userId = null, ...). Verified live 2026-10-09: the JSON-RPC
+        layer accepts plain date strings for the CarbonInterface args and applies
+        the projectId/userId filters server-side (probe returned [] cleanly).
+
+        Permission split (soft, per the Timesheets service): filtering on YOUR
+        OWN userId -> timesheets.view (editor+); another user's data or an
+        all-users pull (userId omitted) -> manager+ (timesheets.manage). This is
+        the sharp alternative to get_timesheets()'s pollForNewTimesheets
+        all-account pull.
+        """
+        params: dict = {"dateFrom": date_from, "dateTo": date_to, "kind": kind}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if user_id is not None:
+            params["userId"] = user_id
+        result = await self.call("leantime.rpc.Timesheets.getAll", params)
+        return result or []
+
+    # ------------------------------------------------------------------
+    # Ideas methods added 2026-10-17 for ticket #333 (founder route word "B":
+    # adopt Leantime's native Ideas module as the house idea board).
+    # LIVE-PROBE RECEIPTS (Pike 027, 2026-10-17; scripts
+    # logs/probe-leantime-ideas-v3-pike.py + logs/probe-leantime-ideas-v3b-boards.py;
+    # keys read from .env in-memory, never echoed; zero deletes): every Ideas
+    # RPC call must use the leantime.rpc FQN — a bare "Ideas.ping"-style
+    # string answers -32602 "Method string doesn't start with leantime.rpc."
+    # (that -32602 is the method-string wall, NOT an existence signal —
+    # correcting the v2 probe receipt; all six v2 candidate names answer
+    # -32601 "Method doesn't exist" under the correct FQN). Verified shapes:
+    # Ideas.getAllBoards(projectId REQUIRED), Ideas.pollForNewIdeas(projectId?
+    # and board? both optional), Ideas.createIdeaItem(input/projectId/authorId
+    # -> int id), Ideas.getBoardLabels/getCanvasTypes (no params),
+    # Ideas.getIdeaItem(id REQUIRED), Ideas.getBoardItems(boardId).
+    # Read/create only: NO delete/patch Ideas methods ship this pass.
+    # ------------------------------------------------------------------
+
+    async def ideas_list_boards(self, project_id: int) -> list:
+        """List the Ideas boards (canvases) of one project.
+
+        RPC: leantime.rpc.Ideas.getAllBoards(int $projectId) - projectId is a
+        REQUIRED param ({} answers -32602 "Required Parameter Missing:
+        projectId", probe-verified live 2026-10-17). Returns board rows
+        [{id, title, projectId, ...}]; the Ideas module auto-bootstraps a
+        default "Board" per project, so an empty result means no boards for
+        this key.
+        """
+        return await self.call("leantime.rpc.Ideas.getAllBoards", {"projectId": project_id})
+
+    async def ideas_list(self, project_id: Optional[int] = None, board: Optional[int] = None) -> list:
+        """List ideas, optionally filtered by project and/or board.
+
+        RPC: leantime.rpc.Ideas.pollForNewIdeas(?int $projectId = null,
+        ?int $board = null) - both params are optional ({} probed OK,
+        returning every idea accessible to the key). Rows carry id,
+        description, data, status, box, projectId, canvasId and ISO8601
+        created/modified dates (dates normalized server-side).
+        """
+        params: dict = {}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if board is not None:
+            params["board"] = board
+        result = await self.call("leantime.rpc.Ideas.pollForNewIdeas", params)
+        return result or []
+
+    async def ideas_create(self, description: str, board_canvas_id: int, project_id: int, author_id: int, status: str = "idea", data: str = "", box: str = "idea") -> int:
+        """Create one idea (canvas item) on an Ideas board.
+
+        RPC: leantime.rpc.Ideas.createIdeaItem(array $input, int $projectId,
+        int $authorId) - probe-verified live 2026-10-17 against project 19 /
+        board 26: input keys box / description / status / data / canvasId;
+        the result is the new idea id as an int (scratch idea id 3 read back
+        verbatim through pollForNewIdeas + getIdeaItem). Read/create pass
+        only - NO API delete exists in this toolset; native deletions stay
+        founder-UI-side.
+        """
+        params = {
+            "input": {
+                "box": box,
+                "description": description,
+                "status": status,
+                "data": data,
+                "canvasId": int(board_canvas_id),
+            },
+            "projectId": int(project_id),
+            "authorId": int(author_id),
+        }
+        result = await self.call("leantime.rpc.Ideas.createIdeaItem", params)
+        try:
+            return int(result)
+        except (TypeError, ValueError):
+            return result
