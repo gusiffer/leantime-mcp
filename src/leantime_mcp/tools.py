@@ -406,6 +406,204 @@ TOOLS = [
             "required": ["description", "board_canvas_id", "project_id", "author_id"]
         }
     ),
+    Tool(
+        name="wiki_get_article",
+        description="Read one wiki article by id (Wiki.getArticle). Read-only. Pass project_id (the read-path scoper): Leantime 3.10.4 answers -32000 Server error when projectId is omitted (live receipt 2026-10-21, ticket #373).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "article_id": {
+                    "type": "integer",
+                    "description": "Article id to read"
+                },
+                "project_id": {
+                    "type": "integer",
+                    "description": "Optional project scoping (id from wiki_get_all_project_wikis)"
+                }
+            },
+            "required": ["article_id"]
+        }
+    ),
+    Tool(
+        name="wiki_get_all_project_wikis",
+        description="List a project's wikis (Wiki.getAllProjectWikis). Read-only; when a project owns no wiki yet Leantime bootstraps a Default wiki inside this read (probe receipt 2026-10-21).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "integer",
+                    "description": "Project ID whose wikis to list"
+                }
+            },
+            "required": ["project_id"]
+        }
+    ),
+    Tool(
+        name="wiki_get_all_headlines",
+        description="List a wiki's headline tree (Wiki.getAllWikiHeadlines). Read-only.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "wiki_id": {
+                    "type": "integer",
+                    "description": "Wiki (canvas) id"
+                },
+                "user_id": {
+                    "type": "integer",
+                    "description": "Requesting Leantime user id (the calling mount's account)"
+                }
+            },
+            "required": ["wiki_id", "user_id"]
+        }
+    ),
+    Tool(
+        name="wiki_get_wiki",
+        description="Read one wiki by id (Wiki.getWiki). Read-only.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "wiki_id": {
+                    "type": "integer",
+                    "description": "Wiki id to read"
+                }
+            },
+            "required": ["wiki_id"]
+        }
+    ),
+    Tool(
+        name="wiki_create_wiki",
+        description="Create a wiki in a project (Wiki.createWiki; CREATE is permission-checked server-side). Returns the new wiki id. Read-back verify per C2.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Wiki title"
+                },
+                "project_id": {
+                    "type": "integer",
+                    "description": "Owning project id"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional category label"
+                },
+                "author": {
+                    "type": "integer",
+                    "description": "Optional author id (defaults to the calling mount's Leantime account)"
+                }
+            },
+            "required": ["title", "project_id"]
+        }
+    ),
+    Tool(
+        name="wiki_create_article",
+        description="Create a wiki article page (Wiki.createArticle; canvas_id must be a real wiki id - the service fails closed on a foreign id). The truth footer (canonical Trilium noteId + mirror date + writer) rides inside data; verify the create with wiki_get_article (C2). Returns the new article id.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Article title"
+                },
+                "canvas_id": {
+                    "type": "integer",
+                    "description": "Wiki (canvas) id the page belongs to"
+                },
+                "data": {
+                    "type": "string",
+                    "description": "Full page content (HTML), including the truth footer"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short summary of the page (optional)"
+                },
+                "tags": {
+                    "type": "string",
+                    "description": "Comma-separated tags (optional)"
+                }
+            },
+            "required": ["title", "canvas_id", "data"]
+        }
+    ),
+    Tool(
+        name="wiki_update_article",
+        description="Update a wiki article (Wiki.updateArticle; fails closed on a non-article id). Pass existing_article as the JSON of the article read via wiki_get_article so the audit diff is recorded. Verify the write with wiki_get_article (C2). Returns true.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "article_id": {
+                    "type": "integer",
+                    "description": "Article id to update"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "New title"
+                },
+                "canvas_id": {
+                    "type": "integer",
+                    "description": "Wiki (canvas) id"
+                },
+                "data": {
+                    "type": "string",
+                    "description": "Full new page content (HTML)"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short summary (optional)"
+                },
+                "tags": {
+                    "type": "string",
+                    "description": "Comma-separated tags (optional)"
+                },
+                "existing_article": {
+                    "type": "string",
+                    "description": "JSON of the current article (from wiki_get_article), enabling the audit diff (optional)"
+                }
+            },
+            "required": ["article_id", "title", "canvas_id", "data"]
+        }
+    ),
+    Tool(
+        name="wiki_get_article_activity",
+        description="Read an article's audit + comment feed (Wiki.getArticleActivity). Read-only.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "article_id": {
+                    "type": "integer",
+                    "description": "Article id"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max entries (default 20)"
+                }
+            },
+            "required": ["article_id"]
+        }
+    ),
+    Tool(
+        name="files_get_by_module",
+        description="Read files attached to a module + entity (Files.getFilesByModule; e.g. module='project', entity_id=19). READ ONLY by founder pick of record 2026-10-21 (option (c)): uploads stay native-UI, no binary upload/fetch path ships here.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "module": {
+                    "type": "string",
+                    "description": "Module name (e.g. 'project', 'ticket')"
+                },
+                "entity_id": {
+                    "type": "integer",
+                    "description": "Entity id the files attach to (optional)"
+                },
+                "user_id": {
+                    "type": "integer",
+                    "description": "Optional user scoping"
+                }
+            },
+            "required": ["module"]
+        }
+    ),
 ]
 
 

@@ -457,5 +457,81 @@ async def ideas_create(description: str, board_canvas_id: int, project_id: int, 
     return json.dumps({"id": result}, indent=2)
 
 
+@app.tool()
+async def wiki_get_article(article_id: int, project_id: int = None) -> str:
+    """Read one wiki article by id (leantime.rpc.Wiki.Wiki.getArticle). Read-only. Pass project_id (the read-path scoper): Leantime 3.10.4 answers -32000 Server error when projectId is omitted (live receipt 2026-10-21, ticket #373)."""
+    client = get_client()
+    result = await client.wiki_get_article(article_id, project_id)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def wiki_get_all_project_wikis(project_id: int) -> str:
+    """List a project's wikis (leantime.rpc.Wiki.Wiki.getAllProjectWikis). Read-only. Server note: when a project owns no wiki yet, Leantime bootstraps a Default wiki server-side inside this read (probe receipt 2026-10-21: the project 19 read returned pre-existing wiki 18 unchanged)."""
+    client = get_client()
+    result = await client.wiki_get_all_project_wikis(project_id)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def wiki_get_all_headlines(wiki_id: int, user_id: int) -> str:
+    """List a wiki's headline tree (leantime.rpc.Wiki.Wiki.getAllWikiHeadlines). Read-only."""
+    client = get_client()
+    result = await client.wiki_get_all_headlines(wiki_id, user_id)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def wiki_get_wiki(wiki_id: int) -> str:
+    """Read one wiki by id (leantime.rpc.Wiki.Wiki.getWiki). Read-only."""
+    client = get_client()
+    result = await client.wiki_get_wiki(wiki_id)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def wiki_create_wiki(title: str, project_id: int, category: str = "", author: int = None) -> str:
+    """Create a wiki (leantime.rpc.Wiki.Wiki.createWiki; CREATE is permission-checked server-side against the target project). Returns the new wiki id. Every create gets a read-back verification from the caller (C2)."""
+    client = get_client()
+    result = await client.wiki_create_wiki(title, project_id, category=category, author=author)
+    return json.dumps({"id": result}, indent=2)
+
+
+@app.tool()
+async def wiki_create_article(title: str, canvas_id: int, data: str, description: str = "", tags: str = "") -> str:
+    """Create a wiki article page (leantime.rpc.Wiki.Wiki.createArticle). canvas_id must be a real wiki id - the service fails closed on a foreign id. The article inherits the wiki's project; author attribution is the calling mount's Leantime account. Satellite mirror writes carry the truth footer (canonical Trilium noteId + mirror date + writer) inside data; verify every create with a wiki_get_article read-back (C2). Returns the new article id."""
+    client = get_client()
+    result = await client.wiki_create_article(title, canvas_id, data, description=description, tags=tags)
+    return json.dumps({"id": result}, indent=2)
+
+
+@app.tool()
+async def wiki_update_article(article_id: int, title: str, canvas_id: int, data: str, description: str = "", tags: str = "", existing_article: str = None) -> str:
+    """Update a wiki article (leantime.rpc.Wiki.Wiki.updateArticle; fails closed on a non-article id). Pass existing_article as the JSON of the article currently read via wiki_get_article so the service records the audit diff. Verify every update with a wiki_get_article read-back (C2). Returns true on success."""
+    client = get_client()
+    existing = json.loads(existing_article) if existing_article else None
+    result = await client.wiki_update_article(
+        article_id, title, canvas_id, data,
+        description=description, tags=tags, existing_article=existing,
+    )
+    return json.dumps({"success": result}, indent=2)
+
+
+@app.tool()
+async def wiki_get_article_activity(article_id: int, limit: int = 20) -> str:
+    """Read an article's audit + comment feed (leantime.rpc.Wiki.Wiki.getArticleActivity; limit default 20). Read-only."""
+    client = get_client()
+    result = await client.wiki_get_article_activity(article_id, limit)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def files_get_by_module(module: str, entity_id: int = None, user_id: int = None) -> str:
+    """Read the files attached to a module + entity id (leantime.rpc.Files.Files.getFilesByModule; e.g. module='project', entity_id=19). READ ONLY by founder pick of record 2026-10-21 (option (c)): uploads stay native-UI and no binary upload/fetch tool path ships on this mount."""
+    client = get_client()
+    result = await client.files_get_by_module(module, entity_id, user_id)
+    return json.dumps(result, indent=2)
+
+
 if __name__ == "__main__":
     main()

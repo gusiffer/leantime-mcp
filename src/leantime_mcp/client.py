@@ -494,3 +494,101 @@ class LeantimeClient:
             return int(result)
         except (TypeError, ValueError):
             return result
+
+    # ------------------------------------------------------------------
+    # Wiki + Files methods added 2026-10-21 for ticket #373 (ag-dawa
+    # wire-up; founder pick of record option (c): Files READ only, uploads
+    # stay native-UI, binary-upload legs intentionally absent).
+    # Surface of record = the #371 T-P0 two-plane verified table (source
+    # GitHub v3.10.4 sha d437285a... + live read-only probes), named-param
+    # shape mirrors the PHP signatures exactly like the Ideas methods do.
+    # Deletes stay OUT of this toolset (deleteArticle/deleteWiki are
+    # no-delete-law founder-GO class; updateWiki stays out - staged scope).
+    # House rule for every write in this family: read-back verify with
+    # wiki_get_article (C2) and carry the truth footer (canonical Trilium
+    # noteId + mirror date + writer) inside the written content.
+    # ------------------------------------------------------------------
+
+    async def wiki_get_article(self, article_id: int, project_id: Optional[int] = None) -> Any:
+        """Read one wiki article by id (leantime.rpc.Wiki.Wiki.getArticle)."""
+        params: dict = {"id": int(article_id)}
+        if project_id is not None:
+            params["projectId"] = int(project_id)
+        return await self.call("leantime.rpc.Wiki.Wiki.getArticle", params)
+
+    async def wiki_get_all_project_wikis(self, project_id: int) -> Any:
+        """List a project's wikis (leantime.rpc.Wiki.Wiki.getAllProjectWikis)."""
+        return await self.call("leantime.rpc.Wiki.Wiki.getAllProjectWikis", {"projectId": int(project_id)})
+
+    async def wiki_get_all_headlines(self, wiki_id: int, user_id: int) -> Any:
+        """List a wiki's headlines (leantime.rpc.Wiki.Wiki.getAllWikiHeadlines)."""
+        return await self.call(
+            "leantime.rpc.Wiki.Wiki.getAllWikiHeadlines",
+            {"wikiId": int(wiki_id), "userId": int(user_id)},
+        )
+
+    async def wiki_get_wiki(self, wiki_id: int) -> Any:
+        """Read one wiki (leantime.rpc.Wiki.Wiki.getWiki)."""
+        return await self.call("leantime.rpc.Wiki.Wiki.getWiki", {"id": int(wiki_id)})
+
+    async def wiki_create_wiki(self, title: str, project_id: int, category: str = "", author: Optional[int] = None) -> Any:
+        """Create a wiki (leantime.rpc.Wiki.Wiki.createWiki; CREATE checked
+        server-side against the target project). Model-cast hydration: the
+        fields ride inside the named 'wiki' param (probe receipt 2026-10-21)."""
+        fields: dict = {"title": title, "projectId": int(project_id)}
+        if category:
+            fields["category"] = category
+        if author is not None:
+            fields["author"] = int(author)
+        return await self.call("leantime.rpc.Wiki.Wiki.createWiki", {"wiki": fields})
+
+    async def wiki_create_article(self, title: str, canvas_id: int, data: str, description: str = "", tags: str = "") -> Any:
+        """Create a wiki article page (leantime.rpc.Wiki.Wiki.createArticle).
+        canvas_id must be a real wiki id - the service fails closed on a
+        foreign id (source-verified #371). Author attribution is the calling
+        mount's Leantime account; the truth footer rides inside 'data'."""
+        fields: dict = {
+            "title": title,
+            "description": description,
+            "data": data,
+            "canvasId": int(canvas_id),
+        }
+        if tags:
+            fields["tags"] = tags
+        return await self.call("leantime.rpc.Wiki.Wiki.createArticle", {"article": fields})
+
+    async def wiki_update_article(self, article_id: int, title: str, canvas_id: int, data: str, description: str = "", tags: str = "", existing_article: Optional[dict] = None) -> Any:
+        """Update a wiki article (leantime.rpc.Wiki.Wiki.updateArticle; fails
+        closed on a non-article id). Passing existing_article (the article as
+        read via wiki_get_article) records the audit diff server-side."""
+        fields: dict = {
+            "id": int(article_id),
+            "title": title,
+            "description": description,
+            "data": data,
+            "canvasId": int(canvas_id),
+        }
+        if tags:
+            fields["tags"] = tags
+        params: dict = {"article": fields}
+        if existing_article is not None:
+            params["existingArticle"] = existing_article
+        return await self.call("leantime.rpc.Wiki.Wiki.updateArticle", params)
+
+    async def wiki_get_article_activity(self, article_id: int, limit: int = 20) -> Any:
+        """Read an article's audit + comment feed (leantime.rpc.Wiki.Wiki.getArticleActivity)."""
+        return await self.call(
+            "leantime.rpc.Wiki.Wiki.getArticleActivity",
+            {"articleId": int(article_id), "limit": int(limit)},
+        )
+
+    async def files_get_by_module(self, module: str, entity_id: Optional[int] = None, user_id: Optional[int] = None) -> Any:
+        """Read files attached to a module (leantime.rpc.Files.Files.getFilesByModule). READ only.
+        Binary upload/fetch ships NO tool path here by founder pick of record
+        (option (c), 2026-10-21: uploads stay native-UI)."""
+        params: dict = {"module": module}
+        if entity_id is not None:
+            params["entityId"] = int(entity_id)
+        if user_id is not None:
+            params["userId"] = int(user_id)
+        return await self.call("leantime.rpc.Files.Files.getFilesByModule", params)
