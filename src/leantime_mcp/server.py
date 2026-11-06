@@ -115,20 +115,96 @@ async def create_project(name: str, details: str = None, clientId: int = None, o
     return json.dumps(result, indent=2)
 
 
+# ---------------------------------------------------------------------------
+# Read caps (ticket #488, 2026-11-06).
+#
+# Unbounded read payloads killed the Pike 027 C5 wake chat: one project-19
+# board list breached 1,048,576 bytes, the seat kept exploring, and the chat
+# died at 06:12 with "prompt too long; exceeded max context length by 567,033
+# tokens". The root cause is tool-side, not prompt-side, so every unbounded
+# read surface is capped here:
+#
+#   list_tickets -> description stripped by default; include_description opts in
+#   get_ticket   -> description truncated at DESCRIPTION_CAP chars plus a
+#                   marker carrying the TRUE remaining character count
+#   get_comments -> newest-first, limit default 10, total row count beside
+#                   the returned slice
+#
+# Caps are read-side truncation only: no field is deleted server-side, no
+# write path changes, and the stored records are untouched.
+# ---------------------------------------------------------------------------
+DESCRIPTION_CAP = 8000
+COMMENTS_DEFAULT_LIMIT = 10
+TRUNCATION_MARKER = "[…truncated {remaining} chars — read the tail via get_comments]"
+
+
+def _as_rows(result: Any) -> list:
+    """Normalize a Leantime row collection (JSON array or keyed object) to a list."""
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        return list(result.values())
+    return []
+
+
+def _cap_description(row: Any) -> Any:
+    """Truncate one row's description at DESCRIPTION_CAP with a true-remainder marker."""
+    if not isinstance(row, dict):
+        return row
+    description = row.get("description")
+    if isinstance(description, str) and len(description) > DESCRIPTION_CAP:
+        remaining = len(description) - DESCRIPTION_CAP
+        row["description"] = (
+            description[:DESCRIPTION_CAP]
+            + TRUNCATION_MARKER.format(remaining=remaining)
+        )
+    return row
+
+
+def _comment_sort_key(row: Any) -> tuple:
+    """Newest-first ordering key for comment rows (Leantime 'date', then id)."""
+    if not isinstance(row, dict):
+        return ("", 0)
+    date = str(row.get("date") or row.get("created") or row.get("modified") or "")
+    try:
+        comment_id = int(row.get("id") or 0)
+    except (TypeError, ValueError):
+        comment_id = 0
+    return (date, comment_id)
+
+
 @app.tool()
 async def get_ticket(ticket_id: int) -> str:
-    """Get details of a specific ticket by ID."""
+    """Get details of a specific ticket by ID.
+
+    Read cap (#488): `description` is truncated at 8000 characters and the
+    value ends with "[…truncated N chars — read the tail via get_comments]",
+    where N is the TRUE remaining character count. Read the tail from the
+    comment plane; the stored description is not modified.
+    """
     client = get_client()
     result = await client.get_ticket(ticket_id)
-    return json.dumps(result, indent=2)
+    return json.dumps(_cap_description(result), indent=2)
 
 
 @app.tool()
-async def list_tickets(project_id: int = None) -> str:
-    """List tickets, optionally filtered by project ID."""
+async def list_tickets(project_id: int = None, include_description: bool = False) -> str:
+    """List tickets, optionally filtered by project ID.
+
+    Read cap (#488): rows come back with `description` STRIPPED by default —
+    a single full project board can exceed 1 MB and drown the caller. Pass
+    include_description=true to restore full bodies (opt-in, expensive).
+    """
     client = get_client()
     result = await client.list_tickets(project_id)
-    return json.dumps(result, indent=2)
+    if not isinstance(result, (list, dict)):
+        return json.dumps(result, indent=2)
+    rows = _as_rows(result)
+    if not include_description:
+        for row in rows:
+            if isinstance(row, dict):
+                row.pop("description", None)
+    return json.dumps(rows, indent=2)
 
 
 @app.tool()
@@ -200,11 +276,27 @@ async def add_comment(module: str, module_id: int, comment: str) -> str:
 
 
 @app.tool()
-async def get_comments(module: str, module_id: int) -> str:
-    """Get comments for a module (ticket, project, etc.)."""
+async def get_comments(module: str, module_id: int, limit: int = COMMENTS_DEFAULT_LIMIT) -> str:
+    """Get comments for a module (ticket, project, etc.).
+
+    Read cap (#488): returns the newest `limit` rows (default 10) plus
+    `total` — the full row count BEFORE slicing — so a caller always knows
+    how much it is not seeing. Pass limit=0 for every row.
+    """
     client = get_client()
     result = await client.get_comments(module=module, module_id=module_id)
-    return json.dumps(result, indent=2)
+    rows = _as_rows(result)
+    total = len(rows)
+    ordered = sorted(rows, key=_comment_sort_key, reverse=True)
+    window = ordered if limit is None or limit <= 0 else ordered[:limit]
+    return json.dumps({
+        "module": module,
+        "moduleId": module_id,
+        "total": total,
+        "returned": len(window),
+        "limit": limit,
+        "comments": window,
+    }, indent=2)
 
 
 @app.tool()

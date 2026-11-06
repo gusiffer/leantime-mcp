@@ -219,3 +219,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# key-bearing .env rollback backups (tidy pass 2026-10-25)
+.env.pre-*

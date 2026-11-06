@@ -55,7 +55,7 @@ TOOLS = [
     ),
     Tool(
         name="get_ticket",
-        description="Get details of a specific ticket/task by ID",
+        description="Get details of a specific ticket/task by ID. READ CAP: `description` is truncated at 8000 chars and ends with \"[…truncated N chars — read the tail via get_comments]\" where N is the true remaining count.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -69,13 +69,17 @@ TOOLS = [
     ),
     Tool(
         name="list_tickets",
-        description="List tickets, optionally filtered by project",
+        description="List tickets, optionally filtered by project. READ CAP: rows carry NO `description` by default (a full project board can exceed 1 MB); pass include_description=true to restore full bodies.",
         inputSchema={
             "type": "object",
             "properties": {
                 "project_id": {
                     "type": "integer",
                     "description": "Optional project ID to filter tickets"
+                },
+                "include_description": {
+                    "type": "boolean",
+                    "description": "Opt in to full description bodies (default false = stripped)"
                 }
             }
         }
@@ -218,7 +222,7 @@ TOOLS = [
     ),
     Tool(
         name="get_comments",
-        description="Get all comments for a module",
+        description="Get comments for a module. READ CAP: returns the newest `limit` rows (default 10) plus `total`, the full row count before slicing. Pass limit=0 for every row.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -229,6 +233,10 @@ TOOLS = [
                 "module_id": {
                     "type": "integer",
                     "description": "ID of the module"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Newest-first row cap (default 10; 0 = all rows)"
                 }
             },
             "required": ["module", "module_id"]
